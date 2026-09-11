@@ -16,13 +16,13 @@
  *   - On failure: shows a clear, user-friendly error
  */
 
-import { useState, useRef, useEffect, FormEvent } from "react";
+import { Suspense, useState, useRef, useEffect, FormEvent } from "react";
 import { signIn } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const emailRef = useRef<HTMLInputElement>(null);
@@ -247,5 +247,19 @@ export default function LoginPage() {
         Customers do not need an account.
       </p>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="w-full max-w-sm p-8 flex justify-center">
+          <p className="text-sm text-slate-500 animate-pulse">Loading...</p>
+        </div>
+      }
+    >
+      <LoginForm />
+    </Suspense>
   );
 }

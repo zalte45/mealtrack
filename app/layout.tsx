@@ -9,8 +9,6 @@
 
 import type { Metadata } from "next";
 import { Geist } from "next/font/google";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/lib/auth";
 import { SessionProvider } from "@/components/providers/SessionProvider";
 import "./globals.css";
 
@@ -33,19 +31,15 @@ export const metadata: Metadata = {
   },
 };
 
-export default async function RootLayout({
+export default function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  // Pass the server session to SessionProvider to avoid a client-side
-  // fetch waterfall on initial page load
-  const session = await getServerSession(authOptions);
-
   return (
     <html lang="en" className={`${geist.variable} h-full`}>
       <body className="h-full bg-slate-50 antialiased">
-        <SessionProvider session={session}>{children}</SessionProvider>
+        <SessionProvider>{children}</SessionProvider>
       </body>
     </html>
   );
