@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: mealtrack_db
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: mealtrack
+      POSTGRES_USER: mealtrack
+      POSTGRES_PASSWORD: mealtrack_dev_password
+    volumes:
+      - mealtrack_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mealtrack -d mealtrack"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  mealtrack_pgdata:

@@ -1,0 +1,202 @@
+// ==============================================================================
+// MealTrack — Prisma Schema
+// Source of truth: SRS §5 Data Model + Architecture §6 Database Integrity
+// ==============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ==============================================================================
+// Provider — Business tenant boundary
+// Every query MUST be scoped by providerId (server-enforced).
+// ==============================================================================
+model Provider {
+  id        String   @id @default(cuid())
+  name      String
+  timezone  String   @default("Asia/Kolkata")
+  status    String   @default("ACTIVE") // ACTIVE | SUSPENDED
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users     User[]
+  customers Customer[]
+  mealPlans MealPlan[]
+  auditLogs AuditLog[]
+
+  @@map("providers")
+}
+
+// ==============================================================================
+// User — Application users: OWNER or STAFF only
+// Customers are NOT users (SRS §1, PRD §3).
+// ==============================================================================
+model User {
+  id           String   @id @default(cuid())
+  providerId   String
+  name         String
+  email        String
+  passwordHash String   // bcryptjs hash — NEVER store plaintext
+  role         String   @default("STAFF") // OWNER | STAFF
+  status       String   @default("ACTIVE") // ACTIVE | SUSPENDED
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  provider    Provider     @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  mealRecords MealRecord[] @relation("RecordedByUser")
+  voidedMeals MealRecord[] @relation("VoidedByUser")
+  auditLogs   AuditLog[]
+
+  @@unique([providerId, email])
+  @@index([providerId, status])
+  @@map("users")
+}
+
+// ==============================================================================
+// Customer — Permanent business entity (BR-003, BR-012)
+// memberId4 is a 4-digit string "1001"–"9999", unique per provider.
+// Customer is NEVER deleted if they have meal history; archive instead.
+// ==============================================================================
+model Customer {
+  id         String   @id @default(cuid())
+  providerId String
+  memberId4  String   // Exactly 4 numeric digits, e.g. "4827"
+  name       String
+  mobile     String?
+  notes      String?
+  status     String   @default("ACTIVE") // ACTIVE | ARCHIVED
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  provider      Provider       @relation(fields: [providerId], references: [id], onDelete: Restrict)
+  subscriptions Subscription[]
+  mealRecords   MealRecord[]
+
+  // DB-level uniqueness: one memberId4 per provider (BR-001, BR-003)
+  @@unique([providerId, memberId4])
+  // Fast lookup index for the Meal Counter (hot path)
+  @@index([providerId, memberId4])
+  @@index([providerId, status])
+  @@map("customers")
+}
+
+// ==============================================================================
+// MealPlan — Reusable configurable plan template (BR-006)
+// Subscriptions snapshot the plan values at creation time.
+// ==============================================================================
+model MealPlan {
+  id           String   @id @default(cuid())
+  providerId   String
+  name         String   // e.g. "Monthly 30", "26 Meal Plan"
+  quota        Int      // Total meals in plan — must be positive
+  mealsPerDay  Int      @default(1) // Max meals per businessDate
+  validityDays Int?     // e.g. 30; null = no calendar expiry
+  price        Decimal  @db.Decimal(10, 2) // Store as decimal (SRS §6)
+  status       String   @default("ACTIVE") // ACTIVE | ARCHIVED
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  provider      Provider       @relation(fields: [providerId], references: [id], onDelete: Restrict)
+  subscriptions Subscription[]
+
+  @@index([providerId, status])
+  @@map("meal_plans")
+}
+
+// ==============================================================================
+// Subscription — Customer's purchased meal entitlement snapshot (BR-004–BR-011)
+// A new subscription is created on renewal; old history is preserved.
+// Balance = quota - count(VALID MealRecords for this subscription)
+// ==============================================================================
+model Subscription {
+  id            String    @id @default(cuid())
+  customerId    String
+  planId        String?   // Nullable: allows custom subscriptions without a plan template
+  startDate     DateTime  @db.Date
+  endDate       DateTime? @db.Date // Null = no fixed end date
+  quota         Int       // Snapshot of meals purchased
+  mealsPerDay   Int       @default(1)
+  price         Decimal   @db.Decimal(10, 2)
+  paymentStatus String    @default("PENDING") // PENDING | PAID | PARTIAL
+  status        String    @default("ACTIVE")  // ACTIVE | EXPIRED | CANCELLED
+  notes         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  customer    Customer     @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  plan        MealPlan?    @relation(fields: [planId], references: [id], onDelete: SetNull)
+  mealRecords MealRecord[]
+
+  @@index([customerId, status])
+  @@index([status, endDate]) // For expiry alerts
+  @@map("subscriptions")
+}
+
+// ==============================================================================
+// MealRecord — Operational ledger entry (BR-005, BR-009, BR-010)
+// NEVER hard-delete: use status VOIDED + audit trail.
+// Duplicate prevention: unique constraint on customer+subscription+businessDate
+// (when mealsPerDay=1; for >1 per day, a count check is used instead).
+// ==============================================================================
+model MealRecord {
+  id             String    @id @default(cuid())
+  customerId     String
+  subscriptionId String
+  // businessDate: "YYYY-MM-DD" in provider's local timezone (not UTC)
+  // Stored as String for reliable timezone-safe date comparisons
+  businessDate   String
+  consumedAt     DateTime  @default(now()) // Exact UTC timestamp
+  mealType       String?   // LUNCH | DINNER | SNACK (future; null = unspecified)
+  recordedById   String    // User.id who pressed "Record Meal"
+  idempotencyKey String?   @unique // Optional client/request key preventing rapid duplicate submissions
+  status         String    @default("VALID") // VALID | VOIDED
+  // Void/correction fields (BR-010)
+  voidedAt       DateTime?
+  voidedById     String?
+  voidReason     String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  customer     Customer     @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Restrict)
+  recordedBy   User         @relation("RecordedByUser", fields: [recordedById], references: [id], onDelete: Restrict)
+  voidedBy     User?        @relation("VoidedByUser", fields: [voidedById], references: [id], onDelete: SetNull)
+
+  // Fast lookup indexes (Architecture §6)
+  @@index([subscriptionId])
+  @@index([subscriptionId, businessDate, status]) // Transaction-safe daily meal count index
+  @@index([customerId, businessDate])
+  @@index([businessDate, status]) // For daily register / reports
+  @@map("meal_records")
+}
+
+// ==============================================================================
+// AuditLog — Immutable audit trail for sensitive actions (Architecture §6)
+// Created for: MEAL_RECORDED, MEAL_VOIDED, SUBSCRIPTION_CREATED,
+// SUBSCRIPTION_CANCELLED, CUSTOMER_ARCHIVED, USER_ROLE_CHANGED, etc.
+// ==============================================================================
+model AuditLog {
+  id         String   @id @default(cuid())
+  providerId String
+  actorId    String?  // Null for system actions
+  action     String   // MEAL_RECORDED | MEAL_VOIDED | SUBSCRIPTION_CREATED | ...
+  entity     String   // "MealRecord" | "Subscription" | "Customer" | "User"
+  entityId   String
+  reason     String?
+  metadata   Json?    // Additional context snapshot (safe, no plaintext secrets)
+  timestamp  DateTime @default(now())
+
+  provider Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  actor    User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([providerId, timestamp])
+  @@index([entity, entityId])
+  @@index([actorId])
+  @@map("audit_logs")
+}
