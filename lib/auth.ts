@@ -30,10 +30,9 @@ interface ExtendedUser {
  * - All sensitive business queries are re-validated server-side
  */
 
-import NextAuth, { NextAuthOptions } from "next-auth";
+import { NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import bcryptjs from "bcryptjs";
-import { db } from "@/lib/db";
 import { LoginSchema } from "@/lib/validations";
 
 export const authOptions: NextAuthOptions = {
@@ -62,6 +61,8 @@ export const authOptions: NextAuthOptions = {
         }
 
         const { email, password } = parsed.data;
+
+        const { db } = await import("@/lib/db");
 
         // 2. Look up user by email
         const user = await db.user.findFirst({
@@ -131,5 +132,3 @@ export const authOptions: NextAuthOptions = {
     },
   },
 };
-
-export default NextAuth(authOptions);
