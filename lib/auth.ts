@@ -54,54 +54,62 @@ export const authOptions: NextAuthOptions = {
         password: { label: "Password", type: "password" },
       },
       async authorize(credentials) {
-        // 1. Validate input shape
-        const parsed = LoginSchema.safeParse(credentials);
-        if (!parsed.success) {
-          return null;
-        }
+        try {
+          // 1. Validate input shape
+          const parsed = LoginSchema.safeParse(credentials);
+          if (!parsed.success) {
+            return null;
+          }
 
-        const { email, password } = parsed.data;
+          const { email, password } = parsed.data;
 
-        const { db } = await import("@/lib/db");
+          const { db } = await import("@/lib/db");
 
-        // 2. Look up user by email
-        const user = await db.user.findFirst({
-          where: {
-            email: email.toLowerCase(),
-            status: "ACTIVE",
-          },
-          include: {
-            provider: {
-              select: {
-                id: true,
-                name: true,
-                timezone: true,
-                status: true,
+          // 2. Look up user by email
+          const user = await db.user.findFirst({
+            where: {
+              email: email.toLowerCase(),
+              status: "ACTIVE",
+            },
+            include: {
+              provider: {
+                select: {
+                  id: true,
+                  name: true,
+                  timezone: true,
+                  status: true,
+                },
               },
             },
-          },
-        });
+          });
 
-        if (!user || user.provider.status !== "ACTIVE") {
+          if (!user || user.provider.status !== "ACTIVE") {
+            return null;
+          }
+
+          // 3. Verify password (bcryptjs — never compare plaintext)
+          const isValid = await bcryptjs.compare(password, user.passwordHash);
+          if (!isValid) {
+            return null;
+          }
+
+          // 4. Return safe user object (no passwordHash in token)
+          return {
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            role: user.role,
+            providerId: user.providerId,
+            providerName: user.provider.name,
+            providerTimezone: user.provider.timezone,
+          };
+        } catch (error) {
+          const err = error as Error;
+          console.error("[AUTH_DIAGNOSTIC] Authentication failed due to an internal exception.");
+          console.error(`[AUTH_DIAGNOSTIC] Name: ${err.name}`);
+          console.error(`[AUTH_DIAGNOSTIC] Message: ${err.message}`);
           return null;
         }
-
-        // 3. Verify password (bcryptjs — never compare plaintext)
-        const isValid = await bcryptjs.compare(password, user.passwordHash);
-        if (!isValid) {
-          return null;
-        }
-
-        // 4. Return safe user object (no passwordHash in token)
-        return {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          role: user.role,
-          providerId: user.providerId,
-          providerName: user.provider.name,
-          providerTimezone: user.provider.timezone,
-        };
       },
     }),
   ],
