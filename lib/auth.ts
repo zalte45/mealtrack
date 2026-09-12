@@ -58,6 +58,7 @@ export const authOptions: NextAuthOptions = {
           // 1. Validate input shape
           const parsed = LoginSchema.safeParse(credentials);
           if (!parsed.success) {
+            console.log("[AUTH_DIAGNOSTIC] stage=invalid_credentials_shape");
             return null;
           }
 
@@ -83,16 +84,24 @@ export const authOptions: NextAuthOptions = {
             },
           });
 
-          if (!user || user.provider.status !== "ACTIVE") {
+          if (!user) {
+            console.log("[AUTH_DIAGNOSTIC] stage=user_not_found");
+            return null;
+          }
+
+          if (user.provider.status !== "ACTIVE") {
+            console.log("[AUTH_DIAGNOSTIC] stage=provider_inactive");
             return null;
           }
 
           // 3. Verify password (bcryptjs — never compare plaintext)
           const isValid = await bcryptjs.compare(password, user.passwordHash);
           if (!isValid) {
+            console.log("[AUTH_DIAGNOSTIC] stage=password_mismatch");
             return null;
           }
 
+          console.log("[AUTH_DIAGNOSTIC] stage=authorization_success");
           // 4. Return safe user object (no passwordHash in token)
           return {
             id: user.id,
